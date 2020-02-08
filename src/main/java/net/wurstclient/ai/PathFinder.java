@@ -463,10 +463,10 @@ public class PathFinder
 	
 	public ArrayList<PathPos> formatPath()
 	{
-		if(!done && !failed)
-			throw new IllegalStateException("No path found!");
-		if(!path.isEmpty())
-			throw new IllegalStateException("Path was already formatted!");
+		//if(!done && !failed)
+		//	throw new IllegalStateException("No path found!");
+		//if(!path.isEmpty())
+		//	throw new IllegalStateException("Path was already formatted!");
 		
 		// get last position
 		PathPos pos;

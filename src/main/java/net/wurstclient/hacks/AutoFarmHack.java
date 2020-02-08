@@ -7,6 +7,7 @@
  */
 package net.wurstclient.hacks;
 
+import java.awt.Color;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -17,10 +18,16 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import org.apache.http.util.EntityUtils;
 import org.lwjgl.opengl.GL11;
-
 import net.minecraft.block.*;
+import net.minecraft.client.font.TextRenderer;
 import net.minecraft.client.network.ClientPlayerEntity;
+import net.minecraft.entity.Entity;
+import net.minecraft.block.entity.ChestBlockEntity;
+import net.minecraft.block.entity.LockableContainerBlockEntity;
+import net.minecraft.entity.ItemEntity;
+import net.minecraft.item.BoneMealItem;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
@@ -33,6 +40,10 @@ import net.minecraft.util.math.Vec3d;
 import net.minecraft.util.shape.VoxelShape;
 import net.wurstclient.Category;
 import net.wurstclient.SearchTags;
+import net.wurstclient.WurstClient;
+import net.wurstclient.ai.PathFinder;
+import net.wurstclient.ai.PathProcessor;
+import net.wurstclient.commands.PathCmd;
 import net.wurstclient.events.RenderListener;
 import net.wurstclient.events.UpdateListener;
 import net.wurstclient.hack.Hack;
@@ -48,18 +59,27 @@ public final class AutoFarmHack extends Hack
 	implements UpdateListener, RenderListener
 {
 	private final SliderSetting range =
-		new SliderSetting("Range", 5, 1, 6, 0.05, ValueDisplay.DECIMAL);
+		new SliderSetting("Range", 5, 1, 60, 0.05, ValueDisplay.DECIMAL);
 	
 	private final HashMap<BlockPos, Item> plants = new HashMap<>();
 	
 	private final ArrayDeque<Set<BlockPos>> prevBlocks = new ArrayDeque<>();
+	private ArrayList<Entity> items = new ArrayList<Entity>(); 
 	private BlockPos currentBlock;
+	private BlockPos closestChest;
 	private float progress;
 	private float prevProgress;
 	
 	private int displayList;
 	private int box;
 	private int node;
+	private PathFinder pathFinder;  
+	private PathProcessor processor;
+	ItemEntity targetEntity = null;
+	private int ticksProcessing;
+	private final ArrayList<ItemEntity> groundItems = new ArrayList<>();
+	boolean hasInit = false;
+	String LogText = "Testing123";
 	
 	public AutoFarmHack()
 	{
@@ -96,6 +116,9 @@ public final class AutoFarmHack extends Hack
 		RenderUtils.drawNode(node);
 		GL11.glEnd();
 		GL11.glEndList();
+		
+		pathFinder = new PathFinder(MC.player.getBlockPos());
+		
 	}
 	
 	@Override
@@ -115,29 +138,83 @@ public final class AutoFarmHack extends Hack
 		GL11.glDeleteLists(displayList, 1);
 		GL11.glDeleteLists(box, 1);
 		GL11.glDeleteLists(node, 1);
+	//	PathProcessor.releaseControls();
+		pathFinder = null;
+		processor = null;
+		PathProcessor.releaseControls();
+	}
+	public void WalkToPosition(BlockPos pos) 
+	{		
+		if((processor == null || processor.isDone() || ticksProcessing >= 10
+				|| !pathFinder.isPathStillValid(processor.getIndex()))
+				&& (pathFinder.isDone() || pathFinder.isFailed()))
+			{
+				pathFinder = new PathFinder(pos);
+				processor = null;
+				ticksProcessing = 0;
+			}
+			
+			// find path
+			if(!pathFinder.isDone() && !pathFinder.isFailed())
+			{
+				PathProcessor.lockControls();
+				pathFinder.think();
+				pathFinder.formatPath();
+				processor = pathFinder.getProcessor();
+			}
+			// process path
+			if(!processor.isDone())
+			{
+				processor.process();
+				ticksProcessing++;
+			}		
+		
+		
+	}
+	
+	
+	// find chest block.. 
+	public boolean isChest(BlockPos pos)
+	{
+		return false;
 	}
 	
 	@Override
 	public void onUpdate()
 	{
+		// on wait period call this
+		//WURST.getHax().bonemealAuraHack.setEnabled(true);
+		//WURST.getHax().bonemealAuraHack.setEnabled(false);
+		//
 		
 		currentBlock = null;
 		Vec3d eyesVec = RotationUtils.getEyesPos().subtract(0.5, 0.5, 0.5);
 		BlockPos eyesBlock = new BlockPos(RotationUtils.getEyesPos());
+		range.setValue(50);
 		double rangeSq = Math.pow(range.getValue(), 2);
+		
+		
 		int blockRange = (int)Math.ceil(range.getValue());
 		
 		List<BlockPos> blocks = getBlockStream(eyesBlock, blockRange)
 			.filter(pos -> eyesVec.squaredDistanceTo(new Vec3d(pos)) <= rangeSq)
 			.filter(pos -> BlockUtils.canBeClicked(pos))
 			.collect(Collectors.toList());
+		//List<BlockPos> chests = getBlockStream(eyesBlock, blockRange)
+		//		.filter(pos -> eyesVec.squaredDistanceTo(new Vec3d(pos)) <= rangeSq)
+		//		.filter(pos -> BlockUtils.canBeClicked(pos))
+		//		.filter(this::isChest)
+		//		.collect(Collectors.toList());
+		
+		
+		
 		
 		registerPlants(blocks);
 		
 		List<BlockPos> blocksToHarvest = new ArrayList<>();
 		List<BlockPos> blocksToReplant = new ArrayList<>();
 		
-		if(!WURST.getHax().freecamHack.isEnabled())
+		if(!WURST.getHax().freecamHack.isEnabled()) // no freecam check
 		{
 			blocksToHarvest =
 				blocks.parallelStream().filter(this::shouldBeHarvested)
@@ -145,12 +222,11 @@ public final class AutoFarmHack extends Hack
 						pos -> eyesVec.squaredDistanceTo(new Vec3d(pos))))
 					.collect(Collectors.toList());
 			
-			blocksToReplant = getBlockStream(eyesBlock, blockRange)
+			blocksToReplant = getBlockStream(eyesBlock, blockRange)	.filter(pos -> plants.containsKey(pos))
 				.filter(
 					pos -> eyesVec.squaredDistanceTo(new Vec3d(pos)) <= rangeSq)
 				.filter(pos -> BlockUtils.getState(pos).getMaterial()
 					.isReplaceable())
-				.filter(pos -> plants.containsKey(pos))
 				.filter(this::canBeReplanted)
 				.sorted(Comparator.comparingDouble(
 					pos -> eyesVec.squaredDistanceTo(new Vec3d(pos))))
@@ -161,17 +237,173 @@ public final class AutoFarmHack extends Hack
 		{
 			BlockPos pos = blocksToReplant.get(0);
 			Item neededItem = plants.get(pos);
-			if(tryToReplant(pos, neededItem))
+			if(tryToReplant(pos, Items.CARROT))
 				break;
 			
 			blocksToReplant.removeIf(p -> plants.get(p) == neededItem);
 		}
 		
+		BlockPos targetBlockForAI = null;
+		
+		
 		if(blocksToReplant.isEmpty())
+		{
+		
+			ClientPlayerEntity player = MC.player;
+			ItemStack heldItem = player.getMainHandStack();
+			boolean hasFoundBonemeal = false;
+			
+			// check if we have selected bonemeal
+			if(heldItem.isEmpty() || !(heldItem.getItem() instanceof BoneMealItem))
+			{
+				// if not, iterate through inv
+				for(int slot = 0; slot < 36; slot++)
+				{	
+					// are we looking at our own hand item?
+					if(slot == player.inventory.selectedSlot)
+						continue;
+					// check if we have switched to the correct item.. 
+					ItemStack stack = player.inventory.getInvStack(slot);
+					if(!(stack.getItem() instanceof BoneMealItem) || stack.isEmpty()) 
+					{
+						continue;
+					}
+					
+					// switch items in an iterative fashion..
+					if(slot < 9) // hand slots 
+						player.inventory.selectedSlot = slot;
+					else if(player.inventory.getEmptySlot() < 9)
+						IMC.getInteractionManager().windowClick_QUICK_MOVE(slot);
+					else if(player.inventory.getEmptySlot() != -1)
+					{
+						IMC.getInteractionManager()
+							.windowClick_QUICK_MOVE(player.inventory.selectedSlot + 36);
+						IMC.getInteractionManager().windowClick_QUICK_MOVE(slot);
+					}else
+					{
+						IMC.getInteractionManager()
+							.windowClick_PICKUP(player.inventory.selectedSlot + 36);
+						IMC.getInteractionManager().windowClick_PICKUP(slot);
+						IMC.getInteractionManager()
+							.windowClick_PICKUP(player.inventory.selectedSlot + 36);
+					}
+					hasFoundBonemeal = true;
+				}
+			}else 
+				hasFoundBonemeal = true;
+
+			
+			
+			
+			boolean shouldPlantSeeds = false;
+			boolean shouldHarvest = false;
+			// look nearby and look for empty blocks.. 
+			if (blocksToReplant.isEmpty())
+				shouldPlantSeeds = false;
+			else 
+			{	
+				double minDist = 999999;
+				
+				for(BlockPos pos : blocksToReplant)
+				{
+					double curDist = pos.getSquaredDistance(MC.player.getBlockPos());
+					if (minDist < curDist) {
+						targetBlockForAI = pos;
+						shouldPlantSeeds = true;
+					}
+				}
+			}
+			
+		
+			
+			
+			boolean shouldPickupObjects = false;		
+			if (shouldPlantSeeds == false && shouldHarvest == false)
+			{
+				shouldPickupObjects = true;
+			}
+			
+			
+			if (shouldPickupObjects)
+			{
+				groundItems.clear();
+				for(Entity entity : MC.world.getEntities())
+					if(entity instanceof ItemEntity)
+						groundItems.add((ItemEntity)entity);				
+				
+				// look for entities.. 
+				float min = 10000000f;
+				ItemEntity ClosestItem = null;
+				for(ItemEntity e : groundItems)
+				{
+					if (e.onGround && (e.getDisplayName().toString().toLowerCase().contains("carrot") || e.getName().toString().toLowerCase().contains("carrot")))
+					{
+						float curDist = (float)e.squaredDistanceTo(MC.player);
+					
+						if (curDist > 1000)
+							continue;
+					
+						if (curDist < min)
+						{
+							min = curDist;
+							targetBlockForAI = e.getBlockPos();
+						}
+					}
+				}
+			}				
+			WURST.getHax().bonemealAuraHack.setEnabled(true);
+			
 			harvest(blocksToHarvest);
+			
+		}
+		else {
+			WURST.getHax().bonemealAuraHack.setEnabled(false);
+			//if (!shouldPlantSeeds)
+			{
+
+				double minDist = 999999;
+				
+				for(BlockPos pos : blocksToHarvest)
+				{
+					double curDist = pos.getSquaredDistance(MC.player.getBlockPos());
+					if (minDist < curDist) {
+						targetBlockForAI = pos;
+						//s/houldHarvest = true;
+					}
+				}
+			}
+		}
+		
+		
+		
+		if (targetBlockForAI != null)
+			WalkToPosition(targetBlockForAI);
+		else 
+			WalkToPosition(MC.player.getBlockPos());
 		
 		updateDisplayList(blocksToHarvest, blocksToReplant);
 	}
+	
+	private void drawString(String s)
+	{
+		TextRenderer tr = WurstClient.MC.textRenderer;
+		int posX;
+		int posY = 100;
+
+		int screenWidth = WurstClient.MC.getWindow().getScaledWidth();
+		posX = screenWidth / 2;
+
+		
+		float[] acColor = WurstClient.INSTANCE.getGui().getAcColor();
+		int textColor = 0x04 << 24 | (int)(acColor[0] * 256) << 16
+			| (int)(acColor[1] * 256) << 8 | (int)(acColor[2] * 256);
+		
+		
+		
+		tr.draw(s, posX + 1, posY + 1, 0xff000000);
+		tr.draw(s, posX, posY, textColor | 0xff000000);
+	}
+	
 	
 	@Override
 	public void onRender(float partialTicks)
@@ -184,12 +416,18 @@ public final class AutoFarmHack extends Hack
 		GL11.glDisable(GL11.GL_TEXTURE_2D);
 		GL11.glEnable(GL11.GL_CULL_FACE);
 		GL11.glDisable(GL11.GL_DEPTH_TEST);
-		
+		GL11.glEnable(GL11.GL_TEXTURE_2D);
 		GL11.glPushMatrix();
+		
 		RenderUtils.applyRenderOffset();
 		
+		drawString(LogText);
 		GL11.glCallList(displayList);
-		
+		if (!pathFinder.isDone())
+		{
+			PathCmd pathCmd = WURST.getCmds().pathCmd;
+			pathFinder.renderPath(pathCmd.isDebugMode(), pathCmd.isDepthTest());
+		}
 		if(currentBlock != null)
 		{
 			GL11.glPushMatrix();
@@ -257,7 +495,7 @@ public final class AutoFarmHack extends Hack
 					.getBlock(pos.down(2)) instanceof KelpPlantBlock);
 		else if(block instanceof NetherWartBlock)
 			return state.get(NetherWartBlock.AGE) >= 3;
-		
+
 		return false;
 	}
 	
@@ -280,17 +518,7 @@ public final class AutoFarmHack extends Hack
 	
 	private boolean canBeReplanted(BlockPos pos)
 	{
-		Item item = plants.get(pos);
-		
-		if(item == Items.WHEAT_SEEDS || item == Items.CARROT
-			|| item == Items.POTATO || item == Items.BEETROOT_SEEDS
-			|| item == Items.PUMPKIN_SEEDS || item == Items.MELON_SEEDS)
-			return BlockUtils.getBlock(pos.down()) instanceof FarmlandBlock;
-		
-		if(item == Items.NETHER_WART)
-			return BlockUtils.getBlock(pos.down()) instanceof SoulSandBlock;
-		
-		return false;
+		return BlockUtils.getBlock(pos.down()) instanceof FarmlandBlock;
 	}
 	
 	private boolean tryToReplant(BlockPos pos, Item neededItem)
@@ -490,4 +718,5 @@ public final class AutoFarmHack extends Hack
 		}
 		GL11.glEndList();
 	}
+
 }
