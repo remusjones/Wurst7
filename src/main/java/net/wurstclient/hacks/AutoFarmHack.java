@@ -23,6 +23,7 @@ import org.lwjgl.opengl.GL11;
 import net.minecraft.block.*;
 import net.minecraft.client.font.TextRenderer;
 import net.minecraft.client.network.ClientPlayerEntity;
+import net.minecraft.container.SlotActionType;
 import net.minecraft.entity.Entity;
 import net.minecraft.block.entity.ChestBlockEntity;
 import net.minecraft.block.entity.LockableContainerBlockEntity;
@@ -61,15 +62,17 @@ public final class AutoFarmHack extends Hack
 	private final SliderSetting range =
 		new SliderSetting("Range", 5, 1, 60, 0.05, ValueDisplay.DECIMAL);
 	
+	//private final SliderSetting timeOutValue =
+	//		new SliderSetting("Range", 5, 1, 1000, 0.05, ValueDisplay.INTEGER);
+	
 	private final HashMap<BlockPos, Item> plants = new HashMap<>();
 	
 	private final ArrayDeque<Set<BlockPos>> prevBlocks = new ArrayDeque<>();
 	private ArrayList<Entity> items = new ArrayList<Entity>(); 
 	private BlockPos currentBlock;
-	private BlockPos closestChest;
 	private float progress;
 	private float prevProgress;
-	
+	public int ChestID = -1;
 	private int displayList;
 	private int box;
 	private int node;
@@ -78,9 +81,15 @@ public final class AutoFarmHack extends Hack
 	ItemEntity targetEntity = null;
 	private int ticksProcessing;
 	private final ArrayList<ItemEntity> groundItems = new ArrayList<>();
+	public boolean isMovingItems = false;
 	boolean hasInit = false;
 	String LogText = "Testing123";
+	public boolean timeOutCurrentChest = false;
+	public int timeoutCounter = 0;
+	public int timeoutMax = 600;
 	
+	private ArrayList<BlockPos> blackListedPositions = new ArrayList<BlockPos>();
+	public int totalCarrots = 0;
 	public AutoFarmHack()
 	{
 		super("AutoFarm",
@@ -118,6 +127,7 @@ public final class AutoFarmHack extends Hack
 		GL11.glEndList();
 		
 		pathFinder = new PathFinder(MC.player.getBlockPos());
+		timeoutCounter = 0;
 		
 	}
 	
@@ -138,10 +148,11 @@ public final class AutoFarmHack extends Hack
 		GL11.glDeleteLists(displayList, 1);
 		GL11.glDeleteLists(box, 1);
 		GL11.glDeleteLists(node, 1);
-	//	PathProcessor.releaseControls();
 		pathFinder = null;
 		processor = null;
 		PathProcessor.releaseControls();
+		blackListedPositions.clear();
+		
 	}
 	public void WalkToPosition(BlockPos pos) 
 	{		
@@ -173,20 +184,12 @@ public final class AutoFarmHack extends Hack
 	}
 	
 	
-	// find chest block.. 
-	public boolean isChest(BlockPos pos)
-	{
-		return false;
-	}
+	
 	
 	@Override
 	public void onUpdate()
 	{
-		// on wait period call this
-		//WURST.getHax().bonemealAuraHack.setEnabled(true);
-		//WURST.getHax().bonemealAuraHack.setEnabled(false);
-		//
-		
+		//timeoutCounter = timeOutValue.getValueI();
 		currentBlock = null;
 		Vec3d eyesVec = RotationUtils.getEyesPos().subtract(0.5, 0.5, 0.5);
 		BlockPos eyesBlock = new BlockPos(RotationUtils.getEyesPos());
@@ -199,14 +202,7 @@ public final class AutoFarmHack extends Hack
 		List<BlockPos> blocks = getBlockStream(eyesBlock, blockRange)
 			.filter(pos -> eyesVec.squaredDistanceTo(new Vec3d(pos)) <= rangeSq)
 			.filter(pos -> BlockUtils.canBeClicked(pos))
-			.collect(Collectors.toList());
-		//List<BlockPos> chests = getBlockStream(eyesBlock, blockRange)
-		//		.filter(pos -> eyesVec.squaredDistanceTo(new Vec3d(pos)) <= rangeSq)
-		//		.filter(pos -> BlockUtils.canBeClicked(pos))
-		//		.filter(this::isChest)
-		//		.collect(Collectors.toList());
-		
-		
+			.collect(Collectors.toList());	
 		
 		
 		registerPlants(blocks);
@@ -232,19 +228,27 @@ public final class AutoFarmHack extends Hack
 					pos -> eyesVec.squaredDistanceTo(new Vec3d(pos))))
 				.collect(Collectors.toList());
 		}
-		
+		BlockPos targetBlockForAI = null;
+		boolean shouldPickupObjects = false;		
+		boolean shouldPlantSeeds = false;
+		boolean shouldHarvestPlants = false;
 		while(!blocksToReplant.isEmpty())
 		{
+
 			BlockPos pos = blocksToReplant.get(0);
+			double curDist = pos.getSquaredDistance(MC.player.getBlockPos());
+			shouldPlantSeeds = true;
+			targetBlockForAI = pos;
 			Item neededItem = plants.get(pos);
-			if(tryToReplant(pos, Items.CARROT))
+			
+			double distSq = Math.pow(2, 2);
+			if(tryToReplant(pos, Items.CARROT) && curDist < distSq)
 				break;
 			
 			blocksToReplant.removeIf(p -> plants.get(p) == neededItem);
 		}
 		
-		BlockPos targetBlockForAI = null;
-		
+		int currInvCount = 0;
 		
 		if(blocksToReplant.isEmpty())
 		{
@@ -259,13 +263,16 @@ public final class AutoFarmHack extends Hack
 				// if not, iterate through inv
 				for(int slot = 0; slot < 36; slot++)
 				{	
+					
 					// are we looking at our own hand item?
 					if(slot == player.inventory.selectedSlot)
 						continue;
 					// check if we have switched to the correct item.. 
 					ItemStack stack = player.inventory.getInvStack(slot);
+				
 					if(!(stack.getItem() instanceof BoneMealItem) || stack.isEmpty()) 
 					{
+					
 						continue;
 					}
 					
@@ -293,93 +300,183 @@ public final class AutoFarmHack extends Hack
 				hasFoundBonemeal = true;
 
 			
-			
-			
-			boolean shouldPlantSeeds = false;
-			boolean shouldHarvest = false;
-			// look nearby and look for empty blocks.. 
-			if (blocksToReplant.isEmpty())
-				shouldPlantSeeds = false;
-			else 
-			{	
-				double minDist = 999999;
-				
-				for(BlockPos pos : blocksToReplant)
-				{
-					double curDist = pos.getSquaredDistance(MC.player.getBlockPos());
-					if (minDist < curDist) {
-						targetBlockForAI = pos;
-						shouldPlantSeeds = true;
-					}
-				}
-			}
-			
-		
-			
-			
-			boolean shouldPickupObjects = false;		
-			if (shouldPlantSeeds == false && shouldHarvest == false)
-			{
-				shouldPickupObjects = true;
-			}
-			
-			
-			if (shouldPickupObjects)
-			{
-				groundItems.clear();
-				for(Entity entity : MC.world.getEntities())
-					if(entity instanceof ItemEntity)
-						groundItems.add((ItemEntity)entity);				
-				
-				// look for entities.. 
-				float min = 10000000f;
-				ItemEntity ClosestItem = null;
-				for(ItemEntity e : groundItems)
-				{
-					if (e.onGround && (e.getDisplayName().toString().toLowerCase().contains("carrot") || e.getName().toString().toLowerCase().contains("carrot")))
-					{
-						float curDist = (float)e.squaredDistanceTo(MC.player);
-					
-						if (curDist > 1000)
-							continue;
-					
-						if (curDist < min)
-						{
-							min = curDist;
-							targetBlockForAI = e.getBlockPos();
-						}
-					}
-				}
-			}				
 			WURST.getHax().bonemealAuraHack.setEnabled(true);
-			
-			harvest(blocksToHarvest);
+
+			double minDist = 999999;
+			for(BlockPos pos : blocksToHarvest)
+			{
+				double curDist = pos.getSquaredDistance(MC.player.getBlockPos());
+				if (curDist < minDist) 
+				{
+					minDist = curDist;
+					targetBlockForAI = pos;
+					shouldPickupObjects = false;
+					shouldPlantSeeds = false;
+					shouldHarvestPlants = true;
+				}
+			}
+			double distSq = Math.pow(2, 2);
+			if (minDist < distSq && currInvCount < 30 && !isMovingItems)
+				harvest(blocksToHarvest);
 			
 		}
 		else {
 			WURST.getHax().bonemealAuraHack.setEnabled(false);
-			//if (!shouldPlantSeeds)
-			{
+			
+		
+		}
+		
+		if (shouldPlantSeeds == false && shouldHarvestPlants == false)
+		{
+			shouldPickupObjects = true;
+		}
 
-				double minDist = 999999;
-				
-				for(BlockPos pos : blocksToHarvest)
+		
+		if (shouldPickupObjects)
+		{
+			groundItems.clear();
+			for(Entity entity : MC.world.getEntities())
+				if(entity instanceof ItemEntity)
+					groundItems.add((ItemEntity)entity);				
+			
+			// look for entities.. 
+			float min = 10000000f;
+			for(ItemEntity e : groundItems)
+			{
+				if (e.onGround && (e.getDisplayName().toString().toLowerCase().contains("carrot") || e.getName().toString().toLowerCase().contains("carrot")))
 				{
-					double curDist = pos.getSquaredDistance(MC.player.getBlockPos());
-					if (minDist < curDist) {
-						targetBlockForAI = pos;
-						//s/houldHarvest = true;
+					float curDist = (float)e.squaredDistanceTo(MC.player);
+				
+					if (curDist > 1000)
+						continue;
+				
+					if (curDist < min)
+					{
+						min = curDist;
+						targetBlockForAI = e.getBlockPos();
 					}
 				}
 			}
+		}			
+		
+		ClientPlayerEntity player = MC.player;
+		
+		for(int slot = 0; slot < 36; slot++)
+		{
+			ItemStack stack = player.inventory.getInvStack(slot);
+			if (stack.getItem() == Items.CARROT)
+				totalCarrots++;
+			if (!stack.isEmpty())
+			{
+				currInvCount++;
+			}
 		}
+			
+		// switch out if inv is almost empty..
+		if (currInvCount <=2) 
+		{
+			isMovingItems = false;
+			totalCarrots = 0;
+		}
+
 		
+		if (currInvCount >= 30 || isMovingItems)
+		{
+			
+			BlockPos chestPos = findNearestChest();
+			double dist = MC.player.getBlockPos().getSquaredDistance(chestPos.getX(),chestPos.getY(), chestPos.getZ(), true);
+
+			double distSq = Math.pow(2, 2);
+			if (dist < distSq) 
+			{
+				
+				
+				//double lookAngle = RotationUtils.look();
+				
+				// look at chest
+				//WURST.getRotationFaker().faceVectorPacket(new Vec3d(chestPos.getX(),chestPos.getY(), chestPos.getZ()));
+				
+				if (!isMovingItems) 
+				{
+					// get click angle 
+					Direction side = null;
+					Direction[] sides = Direction.values();
+					Vec3d[] hitVecs = new Vec3d[sides.length];
+					Vec3d hitVec = null;
+					Vec3d posVec = new Vec3d(chestPos).add(0.5, 0.5, 0.5);
+					
+					for(int i = 0; i < sides.length; i++)
+						hitVecs[i] =
+							posVec.add(new Vec3d(sides[i].getVector()).multiply(0.5));
+					
+					for(int i = 0; i < sides.length; i++)
+					{
+						// check if neighbor can be right clicked
+						BlockPos neighbor = chestPos.offset(sides[i]);
+						if(!BlockUtils.canBeClicked(neighbor))
+							continue;
+						
+						// check line of sight
+						BlockState neighborState = BlockUtils.getState(neighbor);
+						VoxelShape neighborShape =
+							neighborState.getOutlineShape(MC.world, neighbor);
+						if(MC.world.rayTraceBlock(eyesVec, hitVecs[i], neighbor,
+							neighborShape, neighborState) != null)
+							continue;
+						
+						side = sides[i];
+						hitVec = hitVecs[i];
+						break;
+					}
+					
+					if (side != null) 
+					{
+						IMC.getInteractionManager().rightClickBlock(chestPos, side, hitVec);
+						isMovingItems = true;
+					}
+				}else 
+				{
+					timeoutCounter++;
+					if (timeoutCounter > timeoutMax)
+					{
+						// timeout and blacklist chest
+						isMovingItems = false;
+						totalCarrots = 0;
+						blackListedPositions.add(chestPos);
+						timeOutCurrentChest = true;
+						timeoutCounter = 0;
+						MC.options.keyBack.setPressed(true);
+					}	
+				}
+
+				
+				if(MC.currentScreen != null)
+				{
+					
+					if (!timeOutCurrentChest)
+					{
+						// count upwards.. 
+						
+					}
+	
+				}
+				else {
+					isMovingItems = false;
+					totalCarrots = 0;
+					timeoutCounter = 0;
+				}
+			}
+	
+			WalkToPosition(chestPos);
+			
+		}
+		else {
 		
-		
-		if (targetBlockForAI != null)
-			WalkToPosition(targetBlockForAI);
-		else 
-			WalkToPosition(MC.player.getBlockPos());
+			if (targetBlockForAI != null)
+				WalkToPosition(targetBlockForAI);
+			else 
+				WalkToPosition(MC.player.getBlockPos());
+		}
 		
 		updateDisplayList(blocksToHarvest, blocksToReplant);
 	}
@@ -403,8 +500,71 @@ public final class AutoFarmHack extends Hack
 		tr.draw(s, posX + 1, posY + 1, 0xff000000);
 		tr.draw(s, posX, posY, textColor | 0xff000000);
 	}
+	// find chest block.. 
+	public BlockPos findNearestChest()
+	{
+		Vec3d eyesVec = RotationUtils.getEyesPos().subtract(0.5, 0.5, 0.5);
+		BlockPos eyesBlock = new BlockPos(RotationUtils.getEyesPos());
+		double rangeSq = Math.pow(range.getValue(), 2);
+		
+		List<BlockPos> chests = getBlockStream(eyesBlock, (int)Math.ceil(range.getValue()))
+						.filter(pos -> eyesVec.squaredDistanceTo(new Vec3d(pos)) <= rangeSq)
+						.filter(pos -> BlockUtils.canBeClicked(pos))
+						.filter(this::isChest)
+						.collect(Collectors.toList());
+		
+		
+		BlockPos targetBlock = null;
+		double minDist = 1000000;
+		for(BlockPos curBlock : chests)
+		{
+			boolean isBlackListed = false;
+			for (BlockPos blackListedBlock : blackListedPositions)
+			{
+			 	if (blackListedBlock.getX() == curBlock.getX() && blackListedBlock.getY() == curBlock.getY()&& blackListedBlock.getZ() == curBlock.getZ())
+			 		isBlackListed = true;
+			}
+			
+			if (isBlackListed)
+				continue;
+			
+			
+			double curDist = (float)curBlock.getSquaredDistance(MC.player.getBlockPos().getX(),MC.player.getBlockPos().getY(),MC.player.getBlockPos().getZ(),true);
+			
+			if (curDist > 1000)
+				continue;
+		
+			if (curDist < minDist)
+			{
+				minDist = curDist;
+				targetBlock = curBlock;
+			}
+		}
+		
+		if (targetBlock == null)
+			return MC.player.getBlockPos();	
+		else 
+			return targetBlock;
+	}
 	
-	
+	private boolean isChest(BlockPos pos)
+	{
+		
+		Block block = BlockUtils.getBlock(pos); 
+		return block instanceof ChestBlock;
+		
+	}
+	private boolean CheckIfPlant(ItemEntity groundItem)
+	{
+		String carrot = "carrot";
+		String wheat = "wheat";
+		String potato = "potato";
+		String compareString = groundItem.getDisplayName().toString().toLowerCase() + groundItem.getName().toString().toLowerCase();
+
+		
+		
+		return false;
+	}
 	@Override
 	public void onRender(float partialTicks)
 	{

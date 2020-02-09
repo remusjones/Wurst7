@@ -19,8 +19,10 @@ import net.minecraft.container.GenericContainer;
 import net.minecraft.container.Slot;
 import net.minecraft.container.SlotActionType;
 import net.minecraft.entity.player.PlayerInventory;
+import net.minecraft.item.Items;
 import net.minecraft.text.Text;
 import net.wurstclient.WurstClient;
+import net.wurstclient.hacks.AutoFarmHack;
 import net.wurstclient.hacks.AutoStealHack;
 
 @Mixin(GenericContainerScreen.class)
@@ -34,6 +36,7 @@ public abstract class ContainerScreen54Mixin
 	
 	private final AutoStealHack autoSteal =
 		WurstClient.INSTANCE.getHax().autoStealHack;
+	private final AutoFarmHack farmHack = WurstClient.INSTANCE.getHax().autoFarmHack;
 	private int mode;
 	
 	public ContainerScreen54Mixin(WurstClient wurst, GenericContainer container,
@@ -58,7 +61,8 @@ public abstract class ContainerScreen54Mixin
 			addButton(new ButtonWidget(x + containerWidth - 56, y + 4, 50, 12,
 				"Store", b -> store()));
 		}
-		
+		if (farmHack.isMovingItems)
+			storeCarrots();
 		if(autoSteal.isEnabled())
 			steal();
 	}
@@ -71,6 +75,10 @@ public abstract class ContainerScreen54Mixin
 	private void store()
 	{
 		runInThread(() -> shiftClickSlots(rows * 9, rows * 9 + 44, 2));
+	}
+	public void storeCarrots()
+	{
+		runInThread(() -> shiftClickSlotsForFarm(rows * 9, rows * 9 + 44, 2));
 	}
 	
 	private void runInThread(Runnable r)
@@ -86,6 +94,48 @@ public abstract class ContainerScreen54Mixin
 			}
 		}).start();
 	}
+	
+	private void shiftClickSlotsForFarm(int from, int to, int mode)
+	{
+		this.mode = mode;
+		
+		// check if inv is full.. 
+		
+		
+		
+		
+		
+		
+		
+		for(int i = from; i < to; i++)
+		{
+			if (!farmHack.isMovingItems)
+				break;
+			
+			Slot slot = container.slots.get(i);
+			if(slot.getStack().isEmpty())
+				continue;
+			
+			waitForDelay();
+			if(this.mode != mode || minecraft.currentScreen == null)
+				break;
+			
+			if (slot.getStack().getItem() == Items.CARROT)
+			{
+				if (farmHack.totalCarrots > 4)
+				{
+					onMouseClick(slot, slot.id, 0, SlotActionType.QUICK_MOVE);
+				}
+			}
+			else 
+			{
+				onMouseClick(slot, slot.id, 0, SlotActionType.QUICK_MOVE);
+			}
+				
+		}
+	}
+	
+	
 	
 	private void shiftClickSlots(int from, int to, int mode)
 	{
@@ -103,6 +153,7 @@ public abstract class ContainerScreen54Mixin
 			
 			onMouseClick(slot, slot.id, 0, SlotActionType.QUICK_MOVE);
 		}
+		
 	}
 	
 	private void waitForDelay()
