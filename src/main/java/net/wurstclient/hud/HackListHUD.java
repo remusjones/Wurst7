@@ -86,6 +86,15 @@ public final class HackListHUD implements UpdateListener
 		else
 			for(HackListEntry e : activeHax)
 				drawString(e.hack.getRenderName());
+		
+		
+		// draw AI text..
+		
+		if (WurstClient.INSTANCE.getHax().autoFarmHack != null && WurstClient.INSTANCE.getHax().autoFarmHack.LogText!= null &&WurstClient.INSTANCE.getHax().autoFarmHack.isEnabled() )
+			drawString(WurstClient.INSTANCE.getHax().autoFarmHack.LogText);
+		
+		
+		
 	}
 	
 	public void updateState(Hack hack)

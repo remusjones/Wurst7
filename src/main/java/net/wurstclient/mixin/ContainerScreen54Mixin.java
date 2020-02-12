@@ -15,10 +15,12 @@ import net.minecraft.client.gui.screen.ingame.ContainerProvider;
 import net.minecraft.client.gui.screen.ingame.ContainerScreen;
 import net.minecraft.client.gui.screen.ingame.GenericContainerScreen;
 import net.minecraft.client.gui.widget.ButtonWidget;
+import net.minecraft.client.network.ClientPlayerEntity;
 import net.minecraft.container.GenericContainer;
 import net.minecraft.container.Slot;
 import net.minecraft.container.SlotActionType;
 import net.minecraft.entity.player.PlayerInventory;
+import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
 import net.minecraft.text.Text;
 import net.wurstclient.WurstClient;
@@ -61,7 +63,7 @@ public abstract class ContainerScreen54Mixin
 			addButton(new ButtonWidget(x + containerWidth - 56, y + 4, 50, 12,
 				"Store", b -> store()));
 		}
-		if (farmHack.isMovingItems)
+		if (farmHack.isMovingItems && farmHack.isEnabled())
 			storeCarrots();
 		if(autoSteal.isEnabled())
 			steal();
@@ -99,14 +101,25 @@ public abstract class ContainerScreen54Mixin
 	{
 		this.mode = mode;
 		
-		// check if inv is full.. 
+		int containerCount = 0;
+		// count current chest.. 
+		for(int i = 0; i < rows * 9; i++)
+		{
+			Slot slot = container.slots.get(i);
+			if(slot.getStack().isEmpty())
+				continue;
+			
+			containerCount++;
+		}
+		// force timeout
+		if (containerCount >= rows * 9) 
+		{
+			farmHack.timeoutCounter = farmHack.timeoutMax;
+			return;
+		}
 		
 		
-		
-		
-		
-		
-		
+		// check if inv is full.. 	
 		for(int i = from; i < to; i++)
 		{
 			if (!farmHack.isMovingItems)
@@ -122,9 +135,18 @@ public abstract class ContainerScreen54Mixin
 			
 			if (slot.getStack().getItem() == Items.CARROT)
 			{
-				if (farmHack.totalCarrots > 4)
+				if (farmHack.totalCarrots > 1)
 				{
 					onMouseClick(slot, slot.id, 0, SlotActionType.QUICK_MOVE);
+					farmHack.totalCarrots--;
+				}
+			}
+			else if (slot.getStack().getItem() == Items.NETHER_WART)
+			{
+				if (farmHack.totalWarts > 1)
+				{
+					onMouseClick(slot,slot.id,0,SlotActionType.QUICK_MOVE);
+					farmHack.totalWarts--;
 				}
 			}
 			else 
@@ -133,6 +155,9 @@ public abstract class ContainerScreen54Mixin
 			}
 				
 		}
+		farmHack.isMovingItems = false;
+		farmHack.timeoutCounter = 0;
+		farmHack.moveToChestTimeoutTicks = 0;
 	}
 	
 	

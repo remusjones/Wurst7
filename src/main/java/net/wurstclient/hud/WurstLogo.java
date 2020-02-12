@@ -19,8 +19,13 @@ public final class WurstLogo
 	private static final Identifier texture =
 		new Identifier("wurst", "wurst_128.png");
 	
+	public boolean showLogo = false;
+	
 	public void render()
 	{
+		if (!showLogo)
+			return;
+		
 		if(!WurstClient.INSTANCE.getOtfs().wurstLogoOtf.isVisible())
 			return;
 		

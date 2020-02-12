@@ -48,6 +48,7 @@ import net.wurstclient.commands.PathCmd;
 import net.wurstclient.events.RenderListener;
 import net.wurstclient.events.UpdateListener;
 import net.wurstclient.hack.Hack;
+import net.wurstclient.settings.CheckboxSetting;
 import net.wurstclient.settings.SliderSetting;
 import net.wurstclient.settings.SliderSetting.ValueDisplay;
 import net.wurstclient.util.BlockBreaker;
@@ -61,13 +62,20 @@ public final class AutoFarmHack extends Hack
 {
 	private final SliderSetting range =
 		new SliderSetting("Range", 5, 1, 60, 0.05, ValueDisplay.DECIMAL);
-	
+	private final SliderSetting chestRange =
+			new SliderSetting("Chest Search Range", 5, 1, 60, 0.05, ValueDisplay.DECIMAL);
 	//private final SliderSetting timeOutValue =
 	//		new SliderSetting("Range", 5, 1, 1000, 0.05, ValueDisplay.INTEGER);
 	
 	private final HashMap<BlockPos, Item> plants = new HashMap<>();
 	
 	private final ArrayDeque<Set<BlockPos>> prevBlocks = new ArrayDeque<>();
+	
+	
+	private final CheckboxSetting useBonemeal =
+			new CheckboxSetting("Use Bonemeal Aura", false);
+	
+	
 	private ArrayList<Entity> items = new ArrayList<Entity>(); 
 	private BlockPos currentBlock;
 	private float progress;
@@ -83,13 +91,16 @@ public final class AutoFarmHack extends Hack
 	private final ArrayList<ItemEntity> groundItems = new ArrayList<>();
 	public boolean isMovingItems = false;
 	boolean hasInit = false;
-	String LogText = "Testing123";
+	public String LogText = "Testing123";
 	public boolean timeOutCurrentChest = false;
 	public int timeoutCounter = 0;
+	public int moveToChestTimeoutTicks = 0;
+	public int moveToChestTimeoutMaxTicks = 1000;
 	public int timeoutMax = 600;
-	
+	public BlockPos DebugLocation = null;
 	private ArrayList<BlockPos> blackListedPositions = new ArrayList<BlockPos>();
 	public int totalCarrots = 0;
+	public int totalWarts = 0;
 	public AutoFarmHack()
 	{
 		super("AutoFarm",
@@ -99,6 +110,8 @@ public final class AutoFarmHack extends Hack
 				+ "nether warts.");
 		setCategory(Category.BLOCKS);
 		addSetting(range);
+		addSetting(chestRange);
+		addSetting(useBonemeal);
 	}
 	
 	@Override
@@ -128,6 +141,7 @@ public final class AutoFarmHack extends Hack
 		
 		pathFinder = new PathFinder(MC.player.getBlockPos());
 		timeoutCounter = 0;
+		blackListedPositions.clear();
 		
 	}
 	
@@ -161,6 +175,7 @@ public final class AutoFarmHack extends Hack
 				&& (pathFinder.isDone() || pathFinder.isFailed()))
 			{
 				pathFinder = new PathFinder(pos);
+				
 				processor = null;
 				ticksProcessing = 0;
 			}
@@ -169,6 +184,7 @@ public final class AutoFarmHack extends Hack
 			if(!pathFinder.isDone() && !pathFinder.isFailed())
 			{
 				PathProcessor.lockControls();
+				pathFinder.setThinkTime(1000);
 				pathFinder.think();
 				pathFinder.formatPath();
 				processor = pathFinder.getProcessor();
@@ -182,9 +198,26 @@ public final class AutoFarmHack extends Hack
 		
 		
 	}
+	public boolean CheckForFarmEntityItem(ItemEntity entity)
+	{
+		boolean isCarrot = entity.onGround && (entity.getDisplayName().toString().toLowerCase().contains("carrot") || entity.getName().toString().toLowerCase().contains("carrot"));
+		if (isCarrot)
+			return isCarrot;
+		
+		boolean isNetherWart = entity.onGround && (entity.getDisplayName().toString().toLowerCase().contains("wart") || entity.getName().toString().toLowerCase().contains("wart"));
+
+		if (isNetherWart)
+			return isNetherWart;
+
+		return false;
+	}
 	
-	
-	
+	public String BlockPosToString(BlockPos pos)
+	{
+		if (pos == null)
+			return "BlockPos Null";
+		return pos.getX() + "," + pos.getY() + "," + pos.getZ();
+	}
 	
 	@Override
 	public void onUpdate()
@@ -242,7 +275,8 @@ public final class AutoFarmHack extends Hack
 			Item neededItem = plants.get(pos);
 			
 			double distSq = Math.pow(2, 2);
-			if(tryToReplant(pos, Items.CARROT) && curDist < distSq)
+			LogText = "Moving to Seed BlockPos: " + BlockPosToString(pos); 
+			if(tryToReplant(pos, neededItem) && curDist < distSq)
 				break;
 			
 			blocksToReplant.removeIf(p -> plants.get(p) == neededItem);
@@ -252,54 +286,60 @@ public final class AutoFarmHack extends Hack
 		
 		if(blocksToReplant.isEmpty())
 		{
-		
-			ClientPlayerEntity player = MC.player;
-			ItemStack heldItem = player.getMainHandStack();
 			boolean hasFoundBonemeal = false;
-			
-			// check if we have selected bonemeal
-			if(heldItem.isEmpty() || !(heldItem.getItem() instanceof BoneMealItem))
+			if (useBonemeal.isChecked())
 			{
-				// if not, iterate through inv
-				for(int slot = 0; slot < 36; slot++)
-				{	
 					
-					// are we looking at our own hand item?
-					if(slot == player.inventory.selectedSlot)
-						continue;
-					// check if we have switched to the correct item.. 
-					ItemStack stack = player.inventory.getInvStack(slot);
+				ClientPlayerEntity player = MC.player;
 				
-					if(!(stack.getItem() instanceof BoneMealItem) || stack.isEmpty()) 
-					{
+				ItemStack heldItem = player.getMainHandStack();
+		
+				
+				// check if we have selected bonemeal
+				if(heldItem.isEmpty() || !(heldItem.getItem() instanceof BoneMealItem))
+				{
+					// if not, iterate through inv
+					for(int slot = 0; slot < 36; slot++)
+					{	
+						
+						// are we looking at our own hand item?
+						if(slot == player.inventory.selectedSlot)
+							continue;
+						// check if we have switched to the correct item.. 
+						ItemStack stack = player.inventory.getInvStack(slot);
 					
-						continue;
+						if(!(stack.getItem() instanceof BoneMealItem) || stack.isEmpty()) 
+						{
+							continue;
+						}
+						
+						// switch items in an iterative fashion..
+						if(slot < 9) // hand slots 
+							player.inventory.selectedSlot = slot;
+						else if(player.inventory.getEmptySlot() < 9)
+							IMC.getInteractionManager().windowClick_QUICK_MOVE(slot);
+						else if(player.inventory.getEmptySlot() != -1)
+						{
+							IMC.getInteractionManager()
+								.windowClick_QUICK_MOVE(player.inventory.selectedSlot + 36);
+							IMC.getInteractionManager().windowClick_QUICK_MOVE(slot);
+						}else
+						{
+							IMC.getInteractionManager()
+								.windowClick_PICKUP(player.inventory.selectedSlot + 36);
+							IMC.getInteractionManager().windowClick_PICKUP(slot);
+							IMC.getInteractionManager()
+								.windowClick_PICKUP(player.inventory.selectedSlot + 36);
+						}
+						hasFoundBonemeal = true;
 					}
-					
-					// switch items in an iterative fashion..
-					if(slot < 9) // hand slots 
-						player.inventory.selectedSlot = slot;
-					else if(player.inventory.getEmptySlot() < 9)
-						IMC.getInteractionManager().windowClick_QUICK_MOVE(slot);
-					else if(player.inventory.getEmptySlot() != -1)
-					{
-						IMC.getInteractionManager()
-							.windowClick_QUICK_MOVE(player.inventory.selectedSlot + 36);
-						IMC.getInteractionManager().windowClick_QUICK_MOVE(slot);
-					}else
-					{
-						IMC.getInteractionManager()
-							.windowClick_PICKUP(player.inventory.selectedSlot + 36);
-						IMC.getInteractionManager().windowClick_PICKUP(slot);
-						IMC.getInteractionManager()
-							.windowClick_PICKUP(player.inventory.selectedSlot + 36);
-					}
+				}else 
 					hasFoundBonemeal = true;
-				}
-			}else 
-				hasFoundBonemeal = true;
+			}
 
 			
+			if (hasFoundBonemeal)
+				LogText = "Bonemeal Aura.."; 
 			WURST.getHax().bonemealAuraHack.setEnabled(true);
 
 			double minDist = 999999;
@@ -316,6 +356,9 @@ public final class AutoFarmHack extends Hack
 				}
 			}
 			double distSq = Math.pow(2, 2);
+			
+			
+			LogText = "Moving to Plant: " + BlockPosToString(targetBlockForAI); 
 			if (minDist < distSq && currInvCount < 30 && !isMovingItems)
 				harvest(blocksToHarvest);
 			
@@ -343,7 +386,7 @@ public final class AutoFarmHack extends Hack
 			float min = 10000000f;
 			for(ItemEntity e : groundItems)
 			{
-				if (e.onGround && (e.getDisplayName().toString().toLowerCase().contains("carrot") || e.getName().toString().toLowerCase().contains("carrot")))
+				if (CheckForFarmEntityItem(e))
 				{
 					float curDist = (float)e.squaredDistanceTo(MC.player);
 				
@@ -357,26 +400,36 @@ public final class AutoFarmHack extends Hack
 					}
 				}
 			}
+			LogText = "Moving to Pickup Item: " + BlockPosToString(targetBlockForAI); 
 		}			
 		
+		//if (!isMovingItems)
+	//	{
 		ClientPlayerEntity player = MC.player;
-		
-		for(int slot = 0; slot < 36; slot++)
-		{
-			ItemStack stack = player.inventory.getInvStack(slot);
-			if (stack.getItem() == Items.CARROT)
-				totalCarrots++;
-			if (!stack.isEmpty())
-			{
-				currInvCount++;
-			}
-		}
 			
+			for(int slot = 0; slot < 36; slot++)
+			{
+				ItemStack stack = player.inventory.getInvStack(slot);
+				
+				if (!isMovingItems) 
+				{
+					if (stack.getItem() == Items.CARROT)
+						totalCarrots++;
+					if (stack.getItem() == Items.NETHER_WART)
+						totalWarts++;
+				}
+				if (!stack.isEmpty())
+				{
+					currInvCount++;
+				}
+			}
+		//}
 		// switch out if inv is almost empty..
 		if (currInvCount <=2) 
 		{
 			isMovingItems = false;
 			totalCarrots = 0;
+			totalWarts = 0;
 		}
 
 		
@@ -384,9 +437,38 @@ public final class AutoFarmHack extends Hack
 		{
 			
 			BlockPos chestPos = findNearestChest();
+			DebugLocation = chestPos;
 			double dist = MC.player.getBlockPos().getSquaredDistance(chestPos.getX(),chestPos.getY(), chestPos.getZ(), true);
+			LogText = "Moving to Chest: " + BlockPosToString(chestPos) + " | Timeout: " + moveToChestTimeoutTicks +"/"+moveToChestTimeoutMaxTicks; 
 
 			double distSq = Math.pow(2, 2);
+			
+			moveToChestTimeoutTicks ++;
+			//if (!isMovingItems)
+			//{
+				// attempt to kickstart movement
+				// lookat chest.. 
+				//WURST.getRotationFaker()
+				//.faceVectorClient(new Vec3d(chestPos.getX(), chestPos.getY(), chestPos.getZ()));
+				// move a step towards the chest.. 
+				//MC.options.keyForward.setPressed(true);
+				///
+				
+			//}
+			if (moveToChestTimeoutTicks > moveToChestTimeoutMaxTicks)
+			{
+				// timeout and blacklist chest
+				isMovingItems = false;
+				totalCarrots = 0;
+				totalWarts = 0;
+				blackListedPositions.add(chestPos);
+				timeOutCurrentChest = true;
+				timeoutCounter = 0;
+				moveToChestTimeoutTicks = 0;
+				LogText = "Finding new Chest: " + BlockPosToString(chestPos); 
+			}	
+			
+			
 			if (dist < distSq) 
 			{
 				
@@ -442,10 +524,12 @@ public final class AutoFarmHack extends Hack
 						// timeout and blacklist chest
 						isMovingItems = false;
 						totalCarrots = 0;
+						totalWarts = 0;
 						blackListedPositions.add(chestPos);
 						timeOutCurrentChest = true;
 						timeoutCounter = 0;
 						MC.options.keyBack.setPressed(true);
+						LogText = "Finding new Chest: " + BlockPosToString(chestPos); 
 					}	
 				}
 
@@ -458,13 +542,19 @@ public final class AutoFarmHack extends Hack
 						// count upwards.. 
 						
 					}
+					LogText = "Delivering to Chest: " + BlockPosToString(chestPos) + " | " + timeoutCounter + "/" + timeoutMax; 
 	
 				}
 				else {
 					isMovingItems = false;
 					totalCarrots = 0;
+					totalWarts = 0;
 					timeoutCounter = 0;
 				}
+			}else 
+			{
+				
+				
 			}
 	
 			WalkToPosition(chestPos);
@@ -475,7 +565,11 @@ public final class AutoFarmHack extends Hack
 			if (targetBlockForAI != null)
 				WalkToPosition(targetBlockForAI);
 			else 
+			{
+				LogText = "Nothing to do.. Waiting for conditions.";; 
 				WalkToPosition(MC.player.getBlockPos());
+				
+			}
 		}
 		
 		updateDisplayList(blocksToHarvest, blocksToReplant);
@@ -505,7 +599,7 @@ public final class AutoFarmHack extends Hack
 	{
 		Vec3d eyesVec = RotationUtils.getEyesPos().subtract(0.5, 0.5, 0.5);
 		BlockPos eyesBlock = new BlockPos(RotationUtils.getEyesPos());
-		double rangeSq = Math.pow(range.getValue(), 2);
+		double rangeSq = Math.pow(chestRange.getValue(), 2);
 		
 		List<BlockPos> chests = getBlockStream(eyesBlock, (int)Math.ceil(range.getValue()))
 						.filter(pos -> eyesVec.squaredDistanceTo(new Vec3d(pos)) <= rangeSq)
@@ -515,7 +609,7 @@ public final class AutoFarmHack extends Hack
 		
 		
 		BlockPos targetBlock = null;
-		double minDist = 1000000;
+		double minDist = 1000000000;
 		for(BlockPos curBlock : chests)
 		{
 			boolean isBlackListed = false;
@@ -530,9 +624,7 @@ public final class AutoFarmHack extends Hack
 			
 			
 			double curDist = (float)curBlock.getSquaredDistance(MC.player.getBlockPos().getX(),MC.player.getBlockPos().getY(),MC.player.getBlockPos().getZ(),true);
-			
-			if (curDist > 1000)
-				continue;
+
 		
 			if (curDist < minDist)
 			{
@@ -554,20 +646,12 @@ public final class AutoFarmHack extends Hack
 		return block instanceof ChestBlock;
 		
 	}
-	private boolean CheckIfPlant(ItemEntity groundItem)
-	{
-		String carrot = "carrot";
-		String wheat = "wheat";
-		String potato = "potato";
-		String compareString = groundItem.getDisplayName().toString().toLowerCase() + groundItem.getName().toString().toLowerCase();
 
-		
-		
-		return false;
-	}
 	@Override
 	public void onRender(float partialTicks)
 	{
+		PathCmd pathCmd = WURST.getCmds().pathCmd;
+		pathFinder.renderPath(pathCmd.isDebugMode(), pathCmd.isDepthTest());
 		// GL settings
 		GL11.glEnable(GL11.GL_BLEND);
 		GL11.glBlendFunc(GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA);
@@ -576,18 +660,49 @@ public final class AutoFarmHack extends Hack
 		GL11.glDisable(GL11.GL_TEXTURE_2D);
 		GL11.glEnable(GL11.GL_CULL_FACE);
 		GL11.glDisable(GL11.GL_DEPTH_TEST);
-		GL11.glEnable(GL11.GL_TEXTURE_2D);
 		GL11.glPushMatrix();
 		
 		RenderUtils.applyRenderOffset();
 		
-		drawString(LogText);
 		GL11.glCallList(displayList);
-		if (!pathFinder.isDone())
+		//if (!pathFinder.isDone())
+		//{
+
+		//}
+		
+		// draw all blacklisted boxes
+		for(BlockPos pos : blackListedPositions)
 		{
-			PathCmd pathCmd = WURST.getCmds().pathCmd;
-			pathFinder.renderPath(pathCmd.isDebugMode(), pathCmd.isDepthTest());
+			GL11.glPushMatrix();
+			Box box = new Box(BlockPos.ORIGIN);
+			GL11.glTranslated(pos.getX(), pos.getY(),
+					pos.getZ());
+			
+			GL11.glScaled(1f, 1f, 1f);
+			GL11.glColor4f(6f, 0f, 0, 0.5F);
+			RenderUtils.drawOutlinedBox(box);
+
+			
+			GL11.glPopMatrix();
 		}
+		
+		if (DebugLocation != null)
+		{
+			GL11.glPushMatrix();
+			Box box = new Box(BlockPos.ORIGIN);
+			GL11.glTranslated(DebugLocation.getX(), DebugLocation.getY(),
+					DebugLocation.getZ());
+			
+			GL11.glScaled(0.5f, 0.5f, 0.5f);
+			GL11.glColor4f(0f, 0f, 6f, 0.5F);
+			RenderUtils.drawSolidBox(box);
+
+			
+			GL11.glPopMatrix();
+		}
+		
+		
+		
 		if(currentBlock != null)
 		{
 			GL11.glPushMatrix();
@@ -678,7 +793,19 @@ public final class AutoFarmHack extends Hack
 	
 	private boolean canBeReplanted(BlockPos pos)
 	{
-		return BlockUtils.getBlock(pos.down()) instanceof FarmlandBlock;
+		Item item = plants.get(pos);
+
+		if(item == Items.WHEAT_SEEDS || item == Items.CARROT
+			|| item == Items.POTATO || item == Items.BEETROOT_SEEDS
+			|| item == Items.PUMPKIN_SEEDS || item == Items.MELON_SEEDS)
+			return BlockUtils.getBlock(pos.down()) instanceof FarmlandBlock;
+
+		if(item == Items.NETHER_WART)
+			return BlockUtils.getBlock(pos.down()) instanceof SoulSandBlock;
+
+		
+		
+		return false;
 	}
 	
 	private boolean tryToReplant(BlockPos pos, Item neededItem)
