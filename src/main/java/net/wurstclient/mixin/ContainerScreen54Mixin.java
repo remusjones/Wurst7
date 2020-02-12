@@ -103,7 +103,7 @@ public abstract class ContainerScreen54Mixin
 		
 		int containerCount = 0;
 		// count current chest.. 
-		for(int i = 0; i < rows * 9; i++)
+		for(int i = 0; i < (rows * 9); i++)
 		{
 			Slot slot = container.slots.get(i);
 			if(slot.getStack().isEmpty())
@@ -112,7 +112,7 @@ public abstract class ContainerScreen54Mixin
 			containerCount++;
 		}
 		// force timeout
-		if (containerCount >= rows * 9) 
+		if (containerCount >= (rows * 9)) 
 		{
 			farmHack.timeoutCounter = farmHack.timeoutMax;
 			return;
@@ -124,6 +124,13 @@ public abstract class ContainerScreen54Mixin
 		{
 			if (!farmHack.isMovingItems)
 				break;
+			
+			if (containerCount >= rows * 9) 
+			{
+				farmHack.timeoutCounter = farmHack.timeoutMax;
+				return;
+			}
+			
 			
 			Slot slot = container.slots.get(i);
 			if(slot.getStack().isEmpty())
@@ -139,6 +146,7 @@ public abstract class ContainerScreen54Mixin
 				{
 					onMouseClick(slot, slot.id, 0, SlotActionType.QUICK_MOVE);
 					farmHack.totalCarrots--;
+					containerCount++;
 				}
 			}
 			else if (slot.getStack().getItem() == Items.NETHER_WART)
@@ -147,17 +155,20 @@ public abstract class ContainerScreen54Mixin
 				{
 					onMouseClick(slot,slot.id,0,SlotActionType.QUICK_MOVE);
 					farmHack.totalWarts--;
+					containerCount++;
 				}
 			}
 			else 
 			{
 				onMouseClick(slot, slot.id, 0, SlotActionType.QUICK_MOVE);
+				containerCount++;
 			}
 				
 		}
 		farmHack.isMovingItems = false;
 		farmHack.timeoutCounter = 0;
 		farmHack.moveToChestTimeoutTicks = 0;
+	
 	}
 	
 	

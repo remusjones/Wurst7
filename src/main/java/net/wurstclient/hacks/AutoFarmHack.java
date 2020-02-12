@@ -6,8 +6,6 @@
  * file, You can obtain one at: https://www.gnu.org/licenses/gpl-3.0.txt
  */
 package net.wurstclient.hacks;
-
-import java.awt.Color;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -17,16 +15,10 @@ import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
-
-import org.apache.http.util.EntityUtils;
 import org.lwjgl.opengl.GL11;
 import net.minecraft.block.*;
-import net.minecraft.client.font.TextRenderer;
 import net.minecraft.client.network.ClientPlayerEntity;
-import net.minecraft.container.SlotActionType;
 import net.minecraft.entity.Entity;
-import net.minecraft.block.entity.ChestBlockEntity;
-import net.minecraft.block.entity.LockableContainerBlockEntity;
 import net.minecraft.entity.ItemEntity;
 import net.minecraft.item.BoneMealItem;
 import net.minecraft.item.Item;
@@ -41,7 +33,6 @@ import net.minecraft.util.math.Vec3d;
 import net.minecraft.util.shape.VoxelShape;
 import net.wurstclient.Category;
 import net.wurstclient.SearchTags;
-import net.wurstclient.WurstClient;
 import net.wurstclient.ai.PathFinder;
 import net.wurstclient.ai.PathProcessor;
 import net.wurstclient.commands.PathCmd;
@@ -75,8 +66,7 @@ public final class AutoFarmHack extends Hack
 	private final CheckboxSetting useBonemeal =
 			new CheckboxSetting("Use Bonemeal Aura", false);
 	
-	
-	private ArrayList<Entity> items = new ArrayList<Entity>(); 
+
 	private BlockPos currentBlock;
 	private float progress;
 	private float prevProgress;
@@ -101,6 +91,7 @@ public final class AutoFarmHack extends Hack
 	private ArrayList<BlockPos> blackListedPositions = new ArrayList<BlockPos>();
 	public int totalCarrots = 0;
 	public int totalWarts = 0;
+	//public int totalWheatSeeds = 0;
 	public AutoFarmHack()
 	{
 		super("AutoFarm",
@@ -200,16 +191,14 @@ public final class AutoFarmHack extends Hack
 	}
 	public boolean CheckForFarmEntityItem(ItemEntity entity)
 	{
-		boolean isCarrot = entity.onGround && (entity.getDisplayName().toString().toLowerCase().contains("carrot") || entity.getName().toString().toLowerCase().contains("carrot"));
-		if (isCarrot)
-			return isCarrot;
-		
-		boolean isNetherWart = entity.onGround && (entity.getDisplayName().toString().toLowerCase().contains("wart") || entity.getName().toString().toLowerCase().contains("wart"));
-
-		if (isNetherWart)
-			return isNetherWart;
-
-		return false;
+		Item item = entity.getStack().getItem();
+		return (item == Items.CARROT || 
+				item == Items.NETHER_WART || 
+				item == Items.WHEAT || 
+				item == Items.WHEAT_SEEDS || 
+				item == Items.BEETROOT_SEEDS || 
+				item == Items.BEETROOT	
+				);
 	}
 	
 	public String BlockPosToString(BlockPos pos)
@@ -384,6 +373,7 @@ public final class AutoFarmHack extends Hack
 			
 			// look for entities.. 
 			float min = 10000000f;
+			ItemEntity item = null;
 			for(ItemEntity e : groundItems)
 			{
 				if (CheckForFarmEntityItem(e))
@@ -397,10 +387,15 @@ public final class AutoFarmHack extends Hack
 					{
 						min = curDist;
 						targetBlockForAI = e.getBlockPos();
+						item = e;
 					}
 				}
 			}
-			LogText = "Moving to Pickup Item: " + BlockPosToString(targetBlockForAI); 
+			if (item != null)
+				LogText = "Moving to Pickup Item: "+ item.toString() +" at "+ BlockPosToString(targetBlockForAI); 
+			else 
+				LogText = "Moving to Pickup Item: "+ BlockPosToString(targetBlockForAI); 
+				
 		}			
 		
 		//if (!isMovingItems)
@@ -574,26 +569,7 @@ public final class AutoFarmHack extends Hack
 		
 		updateDisplayList(blocksToHarvest, blocksToReplant);
 	}
-	
-	private void drawString(String s)
-	{
-		TextRenderer tr = WurstClient.MC.textRenderer;
-		int posX;
-		int posY = 100;
 
-		int screenWidth = WurstClient.MC.getWindow().getScaledWidth();
-		posX = screenWidth / 2;
-
-		
-		float[] acColor = WurstClient.INSTANCE.getGui().getAcColor();
-		int textColor = 0x04 << 24 | (int)(acColor[0] * 256) << 16
-			| (int)(acColor[1] * 256) << 8 | (int)(acColor[2] * 256);
-		
-		
-		
-		tr.draw(s, posX + 1, posY + 1, 0xff000000);
-		tr.draw(s, posX, posY, textColor | 0xff000000);
-	}
 	// find chest block.. 
 	public BlockPos findNearestChest()
 	{
